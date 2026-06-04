@@ -1,0 +1,13 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local Claude Code config (tool settings, not part of the game)
+# Remove this line if you actually want to publish your .claude config.
+.claude/
+
+# Dependencies (none today, but just in case)
+node_modules/

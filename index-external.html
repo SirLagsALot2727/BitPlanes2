@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bit Planes — Physics Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #9be2fe; }
+  body { font-family: 'Cormorant Garamond', serif; }
+  #canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+  .hud { position: absolute; bottom: 16px; left: 16px; display: flex; align-items: flex-end; gap: 14px; font-family: monospace; color: #2a2b29; }
+  .thrust { width: 22px; height: 120px; border: 2px solid #2a2b29; background: rgba(255,255,255,0.35); position: relative; overflow: hidden; border-radius: 3px; }
+  .thrust-level { position: absolute; bottom: 0; left: 0; right: 0; height: 100%; background: #ff0015; transform: translateY(100%); transition: transform 0.08s linear; }
+  .readout { font-size: 13px; line-height: 1.5; background: rgba(255,255,255,0.4); padding: 6px 10px; border-radius: 5px; }
+  .readout b { color: #ff0015; }
+  .controls { position: absolute; top: 16px; right: 16px; font-family: monospace; font-size: 12px; color: #2a2b29; background: rgba(255,255,255,0.4); padding: 10px 12px; border-radius: 5px; line-height: 1.6; max-width: 220px; }
+  .controls kbd { background: #2a2b29; color: #fff; padding: 1px 5px; border-radius: 3px; font-size: 11px; }
+  .title { position: absolute; top: 16px; left: 20px; font-size: 30px; font-weight: 600; color: #2a2b29; letter-spacing: 1px; }
+  .title small { font-size: 13px; opacity: 0.6; display: block; letter-spacing: 3px; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div class="ui">
+  <div class="title">BIT PLANES<small>PHYSICS DEMO</small></div>
+  <div class="controls">
+    <kbd>&uarr;</kbd>/<kbd>&darr;</kbd> thrust level<br>
+    <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> elevator (pitch)<br>
+    <kbd>Space</kbd> fire gun<br>
+    <kbd>X</kbd> deploy missile<br>
+    <kbd>C</kbd> catapult / parachute
+  </div>
+  <div class="hud">
+    <div class="thrust"><div class="thrust-level" id="thrustLevel"></div></div>
+    <div class="readout">SPEED <b id="speedOut">0.0</b><br>THRUST <b id="thrustOut">0</b>/17<br>AMMO <b id="ammoOut">15</b></div>
+  </div>
+</div>
+<script>
+// ---- Vector math (module 0) ----
+const Vv = (x,y)=>({x,y});
+const Vc = v=>({x:v.x,y:v.y});
+const Vzero = ()=>Vv(0,0);
+const Vdiv = (v,s)=> s===0?Vzero():Vv(v.x/s,v.y/s);
+const Vneg = v=>Vv(-v.x,-v.y);
+const Vadd = (...vs)=>{let x=0,y=0;for(const v of vs){x+=v.x;y+=v.y;}return Vv(x,y);};
+const Vsub = (a,b)=>Vv(a.x-b.x,a.y-b.y);
+const Vscale = (v,s)=>Vv(v.x*s,v.y*s);
+const rad = d=>d*Math.PI/180;
+const p50 = rad(50);
+const angleBetween = (a,b)=>{let t=Math.atan2(a.y,a.x)-Math.atan2(b.y,b.x);if(t>Math.PI)t-=2*Math.PI;else if(t<=-Math.PI)t+=2*Math.PI;return t;};
+const rotate = (v,a)=>{const c=Math.cos(a),s=Math.sin(a);return Vv(v.x*c-v.y*s,v.x*s+v.y*c);};
+const len = v=>Math.sqrt(v.x**2+v.y**2);
+const norm = v=>Vdiv(v,len(v));
+const dist = (a,b)=>{const dx=a.x-b.x,dy=a.y-b.y;return Math.sqrt(dx*dx+dy*dy);};
+
+// ---- Constants (module 1) ----
+const C = { m:4, l:100, d:1.5, e:5, h:3, f:15, b:7, i:2, k:17, a:9.81, n:1000, o:80, c:8, T:60 };
+const clampDead = (v,j)=>(v<j&&v>-j)?v:0;
+
+// ---- Sprites ----
+const SPR = {
+  fly1:   { src: "sprites/Fly__1_.png" },
+  fly2:   { src: "sprites/Fly__2_.png" },
+  shoot1: { src: "sprites/Shoot__1_.png" },
+  shoot2: { src: "sprites/Shoot__2_.png" },
+  dead:   { src: "sprites/Dead__1_.png" },
+  flame:  { src: "sprites/Bullet__1_.png" },
+  bg:     { src: "sprites/BG.png" },
+};
+const IMG = {};
+for (const k in SPR){ const im=new Image(); im.src=SPR[k].src; IMG[k]=im; }
+
+// ---- Body base (module 16) ----
+class Body {
+  constructor(forward=Vv(1,0), normal=Vv(0,1)){
+    this.forward=forward; this.normal=normal; this.mass=1; this.angle=0; this.radius=1;
+    this.previous=Vzero(); this.position=Vzero(); this.velocity=Vzero(); this.force=Vzero();
+    this.circles=[];
+  }
+  move(p){ this.position=p; this.previous=Vc(p); }
+  getX(a){ return this.position.x*a+this.previous.x*(1-a); }
+  getY(a){ return this.position.y*a+this.previous.y*(1-a); }
+}
+class Plane extends Body {
+  constructor(color){
+    super(Vv(0,-1),Vv(0,-1));
+    this.elevator=0; this.thrust=0; this.landed=false;
+    this.life=C.h; this.missiles=C.i; this.maxMissiles=C.i; this.ammo=0; this.maxAmmo=0;
+    this.gunReloading=false; this.missileReloading=false; this.color=color; this.radius=20;
+    this.isHuman=false; this.lastSmoke=0; this.shootFlash=0; this.timeouts=[];
+    this.circles=[{v:Vv(-12,-9),r:2},{v:Vv(-8,-9),r:2},{v:Vv(-5,-9),r:2},{v:Vv(-10,0),r:5},{v:Vv(-5,0),r:5},{v:Vv(0,0),r:4.5},{v:Vv(0,-5),r:3},{v:Vv(6,0),r:3.5},{v:Vv(10,-1),r:3.5},{v:Vv(15,-2),r:3},{v:Vv(14,-5),r:4},{v:Vv(-9,8),r:2.5}];
+  }
+  setTimeout(fn,ms){ const t=setTimeout(fn,ms); this.timeouts.push(t); return t; }
+}
+class Bullet extends Body { constructor(s){ super(Vv(1,0),Vv(0,1)); this.source=s; this.radius=2.5; this.circles=[{v:Vv(0,0),r:2.5}]; } }
+class Missile extends Body { constructor(s){ super(Vv(-1,0),Vv(0,-1)); this.source=s; this.thrust=0; this.justDeployed=true; this.radius=8; this.mass=0.1; this.circles=[{v:Vv(-5,0),r:2},{v:Vv(-2,0),r:2},{v:Vv(2,0),r:2},{v:Vv(5,0),r:2}]; } }
+class Puff { constructor(){ this.position=Vzero(); this.velocity=Vzero(); this.angle=0; this.opacity=1; this.scale=1; this.scaleRate=0.8; this.opacityRate=0.3; } }
+class Spark { constructor(){ this.position=Vzero(); this.velocity=Vzero(); this.color='#000'; this.size=1; } }
+class Explosion { constructor(){ this.position=Vzero(); this.velocity=Vzero(); this.frame=0; this.frameDuration=50; this.t=performance.now(); this.frames=9; } }
+
+class World {
+  constructor(o){ this.width=o.width; this.height=o.height; this.ground=o.ground; this.stratosphere=o.stratosphere;
+    this.bodies=new Set(); this.bullets=new Set(); this.particles=new Set(); this.players=[]; this.onCrash=()=>{}; }
+  *[Symbol.iterator](){ yield* this.bodies; yield* this.bullets; }
+  add(o){ (o instanceof Bullet)?this.bullets.add(o):this.bodies.add(o); }
+  has(o){ return (o instanceof Bullet)?this.bullets.has(o):this.bodies.has(o); }
+  delete(o){ (o instanceof Bullet)?this.bullets.delete(o):this.bodies.delete(o); }
+}
+
+// ---- Force models (module 20) ----
+function planeForces(p,world){
+  const speed=len(p.velocity); const aoa=angleBetween(p.forward,p.velocity);
+  const gravity=Vv(0,p.mass*C.a);
+  let thrust=Vscale(p.forward,p.thrust);
+  let lift=Vscale(p.normal,speed*clampDead(aoa,p50));
+  let drag=Vscale(norm(Vneg(p.velocity)),2**(speed-C.l));
+  if(p.position.y<world.stratosphere){ thrust=Vzero(); lift=Vzero(); drag=Vzero(); }
+  p.force=Vadd(gravity,thrust,lift,drag);
+}
+function missileForces(p){
+  const speed=len(p.velocity); const gravity=Vv(0,p.mass*C.a);
+  const thrust=Vscale(p.forward,p.thrust);
+  const drag=Vscale(norm(Vneg(p.velocity)),2**(speed-1.2*C.l));
+  p.force=Vadd(gravity,thrust,drag);
+}
+function bulletForces(b){ b.force=Vv(0,b.mass*C.a); }
+function applyElevator(p,dt){
+  const speed=len(p.velocity); let f=1-speed/(C.l*C.d); if(speed>C.l)f=1-1/C.d;
+  p.angle+=f*C.e*p.elevator*dt; if(p.angle<0)p.angle+=2*Math.PI; if(p.angle>2*Math.PI)p.angle-=2*Math.PI;
+}
+
+function step(world,dt){
+  for(const b of [...world.bullets]){
+    for(const body of world.bodies){
+      if(body instanceof Plane && circlesHit(b,body)){
+        body.life-=1; spawnPuffBurst(world,body,6);
+        if(body.life<=0){ explode(world,body); world.delete(body); world.onCrash(body); }
+        world.bullets.delete(b); break;
+      }
+    }
+  }
+  const planes=[...world.bodies].filter(x=>x instanceof Plane);
+  for(let i=0;i<planes.length;i++)for(let j=i+1;j<planes.length;j++){
+    if(circlesHit(planes[i],planes[j])){ explode(world,planes[i]); explode(world,planes[j]); world.delete(planes[i]); world.delete(planes[j]); world.onCrash(planes[i]); world.onCrash(planes[j]); }
+  }
+  for(const body of world){
+    body.forward=Vv(Math.sin(-body.angle-Math.PI/2),Math.cos(-body.angle-Math.PI/2));
+    body.normal=Vv(Math.sin(-body.angle+Math.PI),Math.cos(-body.angle+Math.PI));
+    if(body instanceof Missile) missileForces(body);
+    else if(body instanceof Plane){ applyElevator(body,dt); planeForces(body,world); if(body.life<C.h) emitSmoke(world,body); }
+    else if(body instanceof Bullet) bulletForces(body);
+    const accel=Vdiv(body.force,body.mass);
+    if(body instanceof Plane && body.landed){
+      if(body.thrust===0) body.velocity.x+=(-body.velocity.x/2)*dt; else body.velocity.x+=C.m*accel.x*dt;
+      body.angle=Math.PI/8; body.velocity.y=0;
+      body.previous.x=body.position.x; body.previous.y=body.position.y;
+      body.position.x+=C.m*body.velocity.x*dt; body.position.y=world.ground-7;
+    } else {
+      body.velocity.x+=C.m*accel.x*dt; body.velocity.y+=C.m*accel.y*dt;
+      body.previous.x=body.position.x; body.previous.y=body.position.y;
+      body.position.x+=C.m*body.velocity.x*dt; body.position.y+=C.m*body.velocity.y*dt;
+    }
+    if(body.position.x+body.radius<0) body.previous.x=body.position.x=world.width;
+    if(body.position.x-body.radius>world.width) body.previous.x=body.position.x=0;
+  }
+  for(const body of [...world.bodies]){
+    if(body.position.y+body.radius>=world.ground){
+      if(body instanceof Plane){
+        const speed=len(body.velocity);
+        if(body.landed){
+          // Reached takeoff speed: leave the runway. Lift clear of the ground
+          // and add a small upward velocity so the crash check below can't fire
+          // on the same/next frame while the collision circles still overlap it.
+          if(speed>45){ body.landed=false; body.position.y=world.ground-body.radius-2; if(body.velocity.y>-2) body.velocity.y=-4; }
+        }
+        else if(circlesTouchGround(body,world.ground)){
+          const a=body.angle;
+          if(body.velocity.y<40 && (a<rad(50)||Math.abs(2*Math.PI-a)<rad(30))) body.landed=true;
+          else { world.delete(body); explode(world,body); world.onCrash(body); }
+        }
+      }
+    }
+  }
+  for(const b of [...world.bullets]){ if(b.position.y>=world.ground) world.bullets.delete(b); }
+}
+function stepParticles(world,dt){
+  for(const t of world.particles){
+    t.velocity=t.velocity||Vzero();
+    t.position.x+=C.m*t.velocity.x*dt; t.position.y+=C.m*t.velocity.y*dt;
+    if(t instanceof Puff){ t.angle+=dt; t.scale+=C.m*t.scaleRate*dt; t.opacity-=C.m*t.opacityRate*dt; if(t.opacity<0) world.particles.delete(t); }
+    else if(t instanceof Explosion){ if(performance.now()-t.t>=t.frameDuration){ t.frame++; t.t=performance.now(); if(t.frame>=t.frames) world.particles.delete(t); } }
+    else if(t instanceof Spark){ t.velocity.y+=C.m*C.a*0.15*dt; if(t.position.y>world.ground) world.particles.delete(t); }
+    if(t.position.x<0) t.position.x=world.width; if(t.position.x>world.width) t.position.x=0;
+  }
+}
+function circlesTouchGround(body,ground){ for(const {v,r} of body.circles){ const p=Vadd(rotate(v,body.angle),body.position); if(p.y+r>=ground) return true; } return false; }
+function overlap(p1,r1,p2,r2){ const R=r1+r2,dx=p1.x-p2.x,dy=p1.y-p2.y; return R*R>dx*dx+dy*dy; }
+function circlesHit(a,b){ if(!overlap(a.position,a.radius,b.position,b.radius)) return false; for(const c1 of a.circles){ const p1=Vadd(rotate(c1.v,a.angle),a.position); for(const c2 of b.circles){ const p2=Vadd(rotate(c2.v,b.angle),b.position); if(overlap(p1,c1.r,p2,c2.r)) return true; } } return false; }
+
+function makeBullet(plane){ const b=new Bullet(plane); b.move(Vadd(plane.position,Vscale(plane.forward,plane.radius+5))); b.velocity=Vadd(Vc(plane.velocity),Vscale(plane.forward,120)); return b; }
+function fireGun(world,plane){
+  if(!world.has(plane)) return;
+  if(plane.ammo>0){ plane.ammo--; world.add(makeBullet(plane)); plane.shootFlash=performance.now()+120; }
+  if(plane.ammo===0 && !plane.gunReloading){ plane.gunReloading=true; plane.setTimeout(()=>{ plane.ammo=plane.maxAmmo; plane.gunReloading=false; },3*C.n); }
+}
+function fireMissile(world,plane){
+  if(!world.has(plane)) return;
+  if(plane.missiles>0){ plane.missiles--; const m=new Missile(plane); m.move(Vadd(plane.position,Vscale(plane.normal,-12))); m.angle=plane.angle; m.velocity=Vadd(Vc(plane.velocity),Vscale(plane.normal,-20)); m.thrust=8; setTimeout(()=>m.justDeployed=false,C.n); world.add(m); }
+  if(plane.missiles===0 && !plane.missileReloading){ plane.missileReloading=true; plane.setTimeout(()=>{ plane.missiles=plane.maxMissiles; plane.missileReloading=false; },10*C.n); }
+}
+function emitSmoke(world,plane){
+  const now=performance.now();
+  if(now-plane.lastSmoke>80){ plane.lastSmoke=now; let L=1; if(plane.life===2)L=0.4; else if(plane.life===1)L=0.7;
+    const e=new Puff(); e.position=Vc(plane.position); e.velocity=Vscale(Vadd(plane.velocity,Vscale(Vneg(norm(plane.forward)),20)),0.02);
+    e.angle=2*Math.PI*Math.random(); e.scale=1+0.5*Math.random(); e.opacity=L+0.2*Math.random(); world.particles.add(e); }
+}
+function explode(world,body){ const e=new Explosion(); e.position=Vv(body.position.x,body.position.y); e.velocity=Vscale(body.velocity,0.01); world.particles.add(e); spawnPuffBurst(world,body,14); }
+function spawnPuffBurst(world,body,n){ for(let i=0;i<n;i++){ const s=new Spark(); s.position=Vc(body.position); s.velocity=rotate(Vv(0,-5),Math.PI/2-Math.random()*Math.PI); s.color=['#d80004','#ff7d78','#ffcc00','#454545'][i%4]; s.size=1+Math.floor(3*Math.random()); world.particles.add(s); } }
+
+// ---- Render ----
+const canvas=document.getElementById('canvas'); const ctx=canvas.getContext('2d');
+let cam={offsetX:0,offsetY:0,width:0,height:0,scale:1.25};
+function resize(){ const dpr=(window.devicePixelRatio||1)/cam.scale; const w=window.innerWidth*cam.scale,h=window.innerHeight*cam.scale; canvas.width=w*dpr; canvas.height=h*dpr; cam.width=window.innerWidth*cam.scale; cam.height=window.innerHeight*cam.scale; ctx.setTransform(dpr,0,0,dpr,0,0); }
+window.addEventListener('resize',resize);
+function updateCamera(target){ if(!target) return; const nx=Math.floor(cam.width/2),ny=Math.floor(cam.height/2); const ux=target.getX(1),uy=target.getY(1);
+  if(ux>cam.offsetX+cam.width-nx) cam.offsetX=ux-cam.width+nx; if(ux<cam.offsetX+nx) cam.offsetX=ux-nx;
+  if(uy>cam.offsetY+ny) cam.offsetY=uy-ny; if(uy<cam.offsetY+ny) cam.offsetY=uy-ny;
+  if(cam.offsetX<0) cam.offsetX=0; if(cam.offsetY+cam.height>world.height) cam.offsetY=world.height-cam.height; }
+
+const PLANE_DRAW_W=46;
+function planeImg(p){ if(p.life<=0) return IMG.dead; if(p.shootFlash&&performance.now()<p.shootFlash) return (Math.floor(performance.now()/60)%2)?IMG.shoot1:IMG.shoot2; return (Math.floor(performance.now()/90)%2)?IMG.fly1:IMG.fly2; }
+function drawPlane(p){
+  const img=planeImg(p); if(!img||!img.complete) return;
+  const w=PLANE_DRAW_W, h=w*(img.height/img.width);
+  // Sprite nose points RIGHT. The plane travels along its forward vector,
+  // whose x-component is -cos(angle); it's heading left when that is negative.
+  // Undo the body rotation so the sprite stays level, then mirror horizontally
+  // when heading left so the nose points the way the plane actually flies.
+  const headingLeft = -Math.cos(p.angle) < 0;
+  ctx.save(); ctx.rotate(-p.angle); if(headingLeft) ctx.scale(-1,1); ctx.drawImage(img,-w/2,-h/2,w,h); ctx.restore();
+}
+function draw(){
+  let strat=world.stratosphere-cam.offsetY;
+  if(strat<0) strat=0; else { ctx.fillStyle='#1f4752'; ctx.fillRect(0,0,cam.width,strat); }
+  ctx.fillStyle='#9be2fe'; ctx.fillRect(0,strat,cam.width,cam.height);
+  if(IMG.bg&&IMG.bg.complete){
+    const bw=IMG.bg.width,bh=IMG.bg.height; const scale=(cam.height*1.1)/bh; const dw=bw*scale,dh=bh*scale;
+    const py=(world.ground-cam.offsetY)-dh+60;
+    if(py<cam.height){ ctx.globalAlpha=0.55; let ox=-((cam.offsetX*0.4)%dw); for(let x=ox-dw;x<cam.width+dw;x+=dw) ctx.drawImage(IMG.bg,x,py,dw,dh); ctx.globalAlpha=1; }
+  }
+  const gy=world.ground-cam.offsetY;
+  if(gy<cam.height){ ctx.fillStyle='#84c44d'; ctx.fillRect(0,gy,cam.width,cam.height-gy); ctx.fillStyle='#5e9e34'; ctx.fillRect(0,gy,cam.width,6); }
+  for(const b of world){
+    const x=b.getX(1)-cam.offsetX,y=b.getY(1)-cam.offsetY;
+    if(x+b.radius<0||x-b.radius>cam.width) continue;
+    ctx.save(); ctx.translate(x,y); ctx.rotate(b.angle);
+    if(b instanceof Plane) drawPlane(b);
+    else if(b instanceof Bullet){ ctx.fillStyle='#d39a3c'; ctx.strokeStyle='#000'; ctx.beginPath(); ctx.arc(0,0,2.5,0,2*Math.PI); ctx.fill(); ctx.stroke(); }
+    else if(b instanceof Missile){ ctx.fillStyle='#d8d8d8'; ctx.strokeStyle='#979797'; ctx.fillRect(-8,-2,16,4); ctx.strokeRect(-8,-2,16,4); ctx.fillStyle='#454545'; ctx.beginPath(); ctx.moveTo(8,-3); ctx.lineTo(13,0); ctx.lineTo(8,3); ctx.closePath(); ctx.fill(); }
+    ctx.restore();
+  }
+  for(const t of world.particles){
+    const x=t.position.x-cam.offsetX,y=t.position.y-cam.offsetY; ctx.save(); ctx.translate(x,y);
+    if(t instanceof Puff){ ctx.globalAlpha=Math.max(0,t.opacity); ctx.fillStyle='#f2f2f2'; ctx.beginPath(); ctx.arc(0,0,5*t.scale,0,2*Math.PI); ctx.fill(); }
+    else if(t instanceof Explosion){ const r=8+t.frame*7; ctx.globalAlpha=1-t.frame/t.frames; ctx.fillStyle=['#fff','#ffcc00','#ff7d78','#d80004'][t.frame%4]; ctx.beginPath(); ctx.arc(0,0,r,0,2*Math.PI); ctx.fill(); }
+    else if(t instanceof Spark){ ctx.fillStyle=t.color; ctx.fillRect(0,0,t.size,t.size); }
+    ctx.restore();
+  }
+  ctx.globalAlpha=1;
+}
+
+function aiUpdate(world,player){
+  const plane=player.plane; if(!plane||!world.has(plane)) return;
+  let target=null,best=Infinity;
+  for(const b of world.bodies){ if(b instanceof Plane && b!==plane && b.player!==player){ const d=dist(plane.position,b.position); if(d<best){ best=d; target=b; } } }
+  if(!target){ plane.elevator=0; if(plane.thrust<C.k) plane.thrust=C.k; return; }
+  const toT=Vsub(target.position,plane.position); const diff=angleBetween(toT,plane.forward);
+  plane.elevator=Math.sign(diff)>0?1:-1;
+  if(Vadd(plane.position,Vscale(plane.velocity,4)).y>world.ground) plane.elevator=Math.sign(plane.forward.x)>0?-1:1;
+  plane.thrust=C.k; if(plane.landed){ plane.velocity.y=-10; plane.landed=false; }
+  if(Math.abs(diff)<rad(8) && best<600 && Math.random()<0.3) fireGun(world,plane);
+}
+
+// ---- Setup ----
+const world=new World({width:15000,height:4000,ground:0,stratosphere:50});
+world.ground=world.height-32;
+const COLORS=['#f36a20','#dbaf02','#70ba01','#49da9a','#34bbe6','#4380db','#d23be7','#ff0786'];
+const player={plane:null,color:'#ff0015',isHuman:true};
+const me=new Plane('#ff0015'); me.isHuman=true; me.player=player; player.plane=me;
+me.maxAmmo=C.f; me.ammo=C.f; me.landed=true; me.move(Vv(world.width/2,world.ground)); world.add(me);
+world.onCrash=function(body){ const p=body.player; if(!p) return; p.plane=null;
+  setTimeout(()=>{ const np=new Plane(p.color); np.isHuman=p.isHuman; np.player=p; p.plane=np; np.maxAmmo=p.isHuman?C.f:C.b; np.ammo=np.maxAmmo; np.landed=true; np.move(Vv(Math.random()*world.width,world.ground)); world.add(np); },2000);
+};
+const ai=[];
+for(let i=0;i<7;i++){ const col=COLORS[i%COLORS.length]; const pl={plane:null,color:col,isHuman:false}; const a=new Plane(col); a.player=pl; pl.plane=a; a.maxAmmo=C.b; a.ammo=C.b; a.landed=true; a.move(Vv(Math.random()*world.width,world.ground)); a.angle=2*Math.PI*Math.random(); world.add(a); ai.push(pl); }
+
+// ---- Input ----
+const keys={up:false,down:false,left:false,right:false,fire:false};
+window.addEventListener('keydown',e=>{
+  switch(e.code){
+    case 'ArrowUp': case 'KeyW': keys.up=true; break;
+    case 'ArrowDown': case 'KeyS': keys.down=true; break;
+    case 'ArrowLeft': case 'KeyA': keys.left=true; break;
+    case 'ArrowRight': case 'KeyD': keys.right=true; break;
+    case 'Space': keys.fire=true; break;
+    case 'KeyX': if(player.plane) fireMissile(world,player.plane); break;
+    case 'KeyC': if(player.plane){ const p=player.plane; p.landed=false; p.velocity=Vv(0,-10); p.thrust=C.k; } break;
+    default: return;
+  }
+  e.preventDefault();
+},true);
+window.addEventListener('keyup',e=>{
+  switch(e.code){
+    case 'ArrowUp': case 'KeyW': keys.up=false; break;
+    case 'ArrowDown': case 'KeyS': keys.down=false; break;
+    case 'ArrowLeft': case 'KeyA': keys.left=false; break;
+    case 'ArrowRight': case 'KeyD': keys.right=false; break;
+    case 'Space': keys.fire=false; break;
+    default: return;
+  }
+  e.preventDefault();
+},true);
+setInterval(()=>{ const p=player.plane; if(!p) return; if(keys.up) p.thrust=Math.min(C.k,p.thrust+2); if(keys.down) p.thrust=Math.max(0,p.thrust-2); p.elevator=keys.left&&!keys.right?-1:(!keys.left&&keys.right?1:0); },30);
+setInterval(()=>{ if(keys.fire&&player.plane) fireGun(world,player.plane); },100);
+setInterval(()=>{ for(const p of ai) aiUpdate(world,p); },80);
+
+// ---- Main loop ----
+let last=performance.now(),acc=0; const FIXED=1/60;
+function frame(){
+  requestAnimationFrame(frame);
+  const now=performance.now(); let delta=(now-last)/1000; if(delta>0.25) delta=0.25; last=now; acc+=delta;
+  while(acc>=FIXED){ step(world,FIXED); acc-=FIXED; }
+  stepParticles(world,FIXED);
+  if(player.plane) updateCamera(player.plane);
+  draw();
+  if(player.plane){ const p=player.plane;
+    document.getElementById('speedOut').textContent=len(p.velocity).toFixed(1);
+    document.getElementById('thrustOut').textContent=Math.round(p.thrust);
+    document.getElementById('ammoOut').textContent=p.ammo;
+    document.getElementById('thrustLevel').style.transform=`translateY(${100-(p.thrust/C.k)*100}%)`;
+  }
+}
+resize(); me.thrust=C.k; frame();
+</script>
+</body>
+</html>
