@@ -1089,9 +1089,9 @@ body.touch.tc-playing .touch-controls { display: block; }
 .tc-fire .tc-missile { width: 60px; height: 60px; font-size: 22px; }
 
 /* Quit-to-menu button (shown during a match; gives fullscreen mobile a way out) */
-.quit-btn {
+.quit-btn, .fs-btn {
   position: fixed; z-index: 9500; display: none;
-  top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left));
+  left: max(8px, env(safe-area-inset-left));
   align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0; border-radius: 9px;
   border: 1px solid rgba(255,255,255,0.28); background: rgba(15,18,28,0.5);
@@ -1099,8 +1099,10 @@ body.touch.tc-playing .touch-controls { display: block; }
   -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
   -webkit-tap-highlight-color: transparent; touch-action: manipulation;
 }
-body.in-match .quit-btn { display: flex; }
-.quit-btn:hover { background: rgba(132,240,13,0.5); border-color: #84f00d; color: #06210a; }
+.quit-btn { top: max(8px, env(safe-area-inset-top)); }
+.fs-btn   { top: calc(max(8px, env(safe-area-inset-top)) + 40px); }
+body.in-match .quit-btn, body.in-match .fs-btn { display: flex; }
+.quit-btn:hover, .fs-btn:hover { background: rgba(132,240,13,0.5); border-color: #84f00d; color: #06210a; }
 .quit-btn.armed {
   width: auto; padding: 0 12px; font-size: 11px; font-weight: 700;
   font-family: var(--font-family-mono); letter-spacing: 1px;
@@ -7956,6 +7958,35 @@ body.in-match .quit-btn { display: flex; }
             btn.textContent = "☰";
         }, 2200);
     });
+
+    // ---- Fullscreen toggle (below the quit button) ----
+    var fsBtn = document.createElement("button");
+    fsBtn.type = "button";
+    fsBtn.className = "fs-btn";
+    fsBtn.textContent = "⛶";
+    fsBtn.setAttribute("aria-label", "Toggle fullscreen");
+    fsBtn.title = "Fullscreen";
+    document.body.appendChild(fsBtn);
+    var fsEl = function () { return document.fullscreenElement || document.webkitFullscreenElement || null; };
+    fsBtn.addEventListener("click", function () {
+        try {
+            if (fsEl()) {
+                (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+            } else {
+                var d = document.documentElement,
+                    req = d.requestFullscreen || d.webkitRequestFullscreen || d.webkitRequestFullScreen,
+                    p = req && req.call(d);
+                if (p && p.catch) p.catch(function () {});
+            }
+        } catch (e) {}
+    });
+    var syncFs = function () {
+        var on = !!fsEl();
+        fsBtn.textContent = on ? "⤢" : "⛶";
+        fsBtn.title = on ? "Exit fullscreen" : "Fullscreen";
+    };
+    document.addEventListener("fullscreenchange", syncFs);
+    document.addEventListener("webkitfullscreenchange", syncFs);
 
     var form = document.querySelector("#game");
     if (form) form.addEventListener("submit", function () { document.body.classList.add("in-match"); });
