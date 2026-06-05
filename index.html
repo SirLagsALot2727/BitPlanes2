@@ -7831,8 +7831,10 @@ body.touch.tc-playing .touch-controls { display: block; }
     // ---- Mobile touch controls ----
     // Reuses the existing keyboard pipeline by dispatching synthetic KeyboardEvents,
     // so desktop keyboard input is untouched and nothing is duplicated.
-    var isTouch = navigator.maxTouchPoints > 0 || ("ontouchstart" in window) ||
-        (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    // Touch-PRIMARY devices only (phones/tablets). A desktop with a mouse reports
+    // hover:hover / pointer:fine, so this won't false-positive there even if the
+    // browser exposes ontouchstart.
+    var isTouch = !!(window.matchMedia && window.matchMedia("(hover: none) and (pointer: coarse)").matches);
     if (isTouch) document.body.classList.add("touch");
 
     var wrap = document.createElement("div");
