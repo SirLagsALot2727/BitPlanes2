@@ -7,6 +7,10 @@
     <meta name="description" content="A browser recreation of the classic side-view aerial-combat game, with force-based flight physics ported from the original. 17 dogfight modes including time-bending duels and local multiplayer.">
     <meta name="theme-color" content="#0d1530">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛩️</text></svg>">
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <style>
 .ribbon{
     position: absolute;
@@ -1052,6 +1056,37 @@ main h1 { text-shadow: 0 0 24px rgba(132,240,13,0.35), 0 2px 4px rgba(0,0,0,0.5)
 .tester-input::placeholder { color: rgba(232,236,245,0.35); }
 .tester-input:focus { outline: none; border-color: rgba(132,240,13,0.6); box-shadow: 0 0 0 3px rgba(132,240,13,0.16); }
 .tester-credit { color: #84f00d !important; font-weight: 600; margin: 8px 0 0 !important; }
+
+/* ===================== Mobile touch controls ===================== */
+.touch-controls { display: none; }
+body.touch.tc-playing .touch-controls { display: block; }
+.tc-pad, .tc-fire {
+  position: fixed; z-index: 9000;
+  bottom: max(16px, env(safe-area-inset-bottom));
+}
+.tc-pad {
+  left: max(14px, env(safe-area-inset-left));
+  display: grid; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(3, 56px); gap: 6px;
+}
+.tc-fire {
+  right: max(14px, env(safe-area-inset-right));
+  display: flex; align-items: flex-end; gap: 16px;
+}
+.tc-btn {
+  -webkit-user-select: none; user-select: none; touch-action: none; -webkit-tap-highlight-color: transparent;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1.5px solid rgba(255,255,255,0.32);
+  background: rgba(15,18,28,0.42); color: #fff; font-size: 20px; font-weight: 700; line-height: 1;
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  width: 56px; height: 56px; cursor: pointer;
+}
+.tc-btn.tc-on { background: rgba(132,240,13,0.6); border-color: #84f00d; color: #06210a; transform: scale(0.94); }
+.tc-pad .tc-up    { grid-area: 1 / 2; }
+.tc-pad .tc-left  { grid-area: 2 / 1; }
+.tc-pad .tc-right { grid-area: 2 / 3; }
+.tc-pad .tc-down  { grid-area: 3 / 2; }
+.tc-fire .tc-gun     { width: 78px; height: 78px; font-size: 26px; }
+.tc-fire .tc-missile { width: 60px; height: 60px; font-size: 22px; }
 
     </style>
 </head>
@@ -7790,6 +7825,85 @@ main h1 { text-shadow: 0 0 24px rgba(132,240,13,0.35), 0 2px 4px rgba(0,0,0,0.5)
             cOv.querySelector(".lab-unlock").appendChild(btn);
         }
     });
+})();
+
+(function () {
+    // ---- Mobile touch controls ----
+    // Reuses the existing keyboard pipeline by dispatching synthetic KeyboardEvents,
+    // so desktop keyboard input is untouched and nothing is duplicated.
+    var isTouch = navigator.maxTouchPoints > 0 || ("ontouchstart" in window) ||
+        (window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    if (isTouch) document.body.classList.add("touch");
+
+    var wrap = document.createElement("div");
+    wrap.className = "touch-controls";
+    var mkBtn = function (cls, label) {
+        var b = document.createElement("div");
+        b.className = "tc-btn " + cls;
+        b.textContent = label;
+        b.setAttribute("role", "button");
+        b.setAttribute("aria-label", cls.replace("tc-", ""));
+        return b;
+    };
+    var pad = document.createElement("div");
+    pad.className = "tc-pad";
+    var up = mkBtn("tc-up", "▲"), down = mkBtn("tc-down", "▼"), left = mkBtn("tc-left", "◀"), right = mkBtn("tc-right", "▶");
+    pad.appendChild(up); pad.appendChild(left); pad.appendChild(right); pad.appendChild(down);
+    var fire = document.createElement("div");
+    fire.className = "tc-fire";
+    var missile = mkBtn("tc-missile", "🚀"), gun = mkBtn("tc-gun", "🔫");
+    fire.appendChild(missile); fire.appendChild(gun);
+    wrap.appendChild(pad); wrap.appendChild(fire);
+    document.body.appendChild(wrap);
+
+    var sendKey = function (type, code) {
+        document.dispatchEvent(new KeyboardEvent(type, { code: code, key: code, bubbles: true }));
+    };
+    // Press-and-hold: keydown on press, keyup on release. Pointer capture keeps the
+    // release reliable even if the finger slides off (prevents "stuck" thrust/fire).
+    var bindHold = function (el, code) {
+        var down = false;
+        el.addEventListener("pointerdown", function (ev) {
+            ev.preventDefault();
+            if (down) return;
+            down = true;
+            try { el.setPointerCapture(ev.pointerId); } catch (e) {}
+            el.classList.add("tc-on");
+            sendKey("keydown", code);
+        });
+        var release = function (ev) {
+            if (!down) return;
+            down = false;
+            if (ev) ev.preventDefault();
+            el.classList.remove("tc-on");
+            sendKey("keyup", code);
+        };
+        el.addEventListener("pointerup", release);
+        el.addEventListener("pointercancel", release);
+    };
+    bindHold(up, "ArrowUp");
+    bindHold(down, "ArrowDown");
+    bindHold(left, "ArrowLeft");
+    bindHold(right, "ArrowRight");
+    bindHold(gun, "Space");
+    // Missile: single tap = one missile (keydown fires it, keyup clears nothing).
+    missile.addEventListener("pointerdown", function (ev) {
+        ev.preventDefault();
+        missile.classList.add("tc-on");
+        sendKey("keydown", "KeyX");
+    });
+    var mUp = function (ev) {
+        if (ev) ev.preventDefault();
+        missile.classList.remove("tc-on");
+        sendKey("keyup", "KeyX");
+    };
+    missile.addEventListener("pointerup", mUp);
+    missile.addEventListener("pointercancel", mUp);
+
+    // Show the controls only once a match starts (and only on touch devices).
+    var reveal = function () { if (isTouch) document.body.classList.add("tc-playing"); };
+    var form = document.querySelector("#game");
+    if (form) form.addEventListener("submit", reveal);
 })();
 </script>
 </body>
