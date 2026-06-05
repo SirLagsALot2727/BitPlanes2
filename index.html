@@ -1091,7 +1091,6 @@ body.touch.tc-playing .touch-controls { display: block; }
 /* Quit-to-menu button (shown during a match; gives fullscreen mobile a way out) */
 .quit-btn, .fs-btn {
   position: fixed; z-index: 9500; display: none;
-  left: max(8px, env(safe-area-inset-left));
   align-items: center; justify-content: center;
   width: 34px; height: 34px; padding: 0; border-radius: 9px;
   border: 1px solid rgba(255,255,255,0.28); background: rgba(15,18,28,0.5);
@@ -1099,8 +1098,12 @@ body.touch.tc-playing .touch-controls { display: block; }
   -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
   -webkit-tap-highlight-color: transparent; touch-action: manipulation;
 }
-.quit-btn { top: max(8px, env(safe-area-inset-top)); }
-.fs-btn   { top: calc(max(8px, env(safe-area-inset-top)) + 40px); }
+/* Desktop: stacked at the bottom-left — clear of the top HUD (scoreboard, minimap, ammo). */
+.quit-btn { left: max(10px, env(safe-area-inset-left)); bottom: max(10px, env(safe-area-inset-bottom)); }
+.fs-btn   { left: max(10px, env(safe-area-inset-left)); bottom: calc(max(10px, env(safe-area-inset-bottom)) + 40px); }
+/* Touch devices: bottom-center, in the gap between the D-pad (left) and fire buttons (right). */
+body.touch .quit-btn { left: calc(50% - 40px); bottom: max(10px, env(safe-area-inset-bottom)); }
+body.touch .fs-btn   { left: calc(50% + 6px);  bottom: max(10px, env(safe-area-inset-bottom)); }
 body.in-match .quit-btn, body.in-match .fs-btn { display: flex; }
 .quit-btn:hover, .fs-btn:hover { background: rgba(132,240,13,0.5); border-color: #84f00d; color: #06210a; }
 .quit-btn.armed {
